@@ -268,7 +268,26 @@ class GaussNFSIC(NFSIC):
         l = kernel.KGauss(gwidthy)
         s, _, _ = nfsic(pdata.X, pdata.Y, k, l, V, W)
         return -s  # 负值用于最小化
-
+    def generic_optimize_locs_widths(pdata, V0, W0, gwidthx0, gwidthy0, max_iter=400):
+        # 获取维度信息
+        J, dx = V0.shape
+        _, dy = W0.shape
+    
+        # 拼接优化参数
+        params0 = np.hstack([V0.ravel(), W0.ravel(), [gwidthx0], [gwidthy0]])
+    
+        # 使用SciPy进行优化
+        res = minimize(nfsic_objective, params0, args=(pdata, J),method='L-BFGS-B', 
+                       options={'maxiter': max_iter})
+    
+        # 解包优化结果
+        opt_params = res.x
+        opt_V = opt_params[:J * dx].reshape(J, dx)
+        opt_W = opt_params[J * dx: J * (dx + dy)].reshape(J, dy)
+        opt_gwidthx = opt_params[-2]
+        opt_gwidthy = opt_params[-1]
+    
+        return opt_V, opt_W, opt_gwidthx, opt_gwidthy, {'obj_values': -res.fun}
     @staticmethod
     def grid_search_gwidth(pdata, V, W, list_gwidthx, list_gwidthy):
         """
