@@ -18,10 +18,12 @@ import logging
 import os
 
 import scipy.stats as stats
-import theano
-import theano.tensor as tensor
-import theano.tensor.nlinalg as nlinalg
-import theano.tensor.slinalg as slinalg
+#import theano
+#import theano.tensor as tensor
+#import theano.tensor.nlinalg as nlinalg
+#import theano.tensor.slinalg as slinalg
+from scipy.optimize import minimize
+
 
 class IndTest(object, metaclass=ABCMeta):
     """Abstract class for an independence test for paired sample."""
@@ -210,6 +212,7 @@ class NFSIC(IndTest):
 
 ## end class NFSIC
 
+    
 class GaussNFSIC(NFSIC):
     """
     Normalized Finite Set Independence Criterion test using 
@@ -239,42 +242,19 @@ class GaussNFSIC(NFSIC):
                 n_permute=n_permute, seed=seed)
 
     @staticmethod
-    def func_obj(Xth, Yth, Vth, Wth, gwidthx_th, gwidthy_th, regth, n, J):
-        """Return a real-valued
-        objective function that works on Theano variables to compute the
-        objective to be used for the optimization.    
-        - Intended to be used with optimize_locs_widths(..).
-        - The returned value is a Theano variable.
-        - J is not a Theano variable.
-
-        - regth: regularization parameter
-        """
-        # shape of a TensorVariable is symbolic until given a concrete value
-        diag_regth = regth*tensor.eye(J)
-        Kth = GaussNFSIC.gauss_kernel_theano(Xth, Vth, gwidthx_th)
-        Lth = GaussNFSIC.gauss_kernel_theano(Yth, Wth, gwidthy_th)
-        # mean
-        mean_k = Kth.mean(0)
-        mean_l = Lth.mean(0)
-        KLth = Kth*Lth
-        # u is a Theano array
-        #from IPython.core.debugger import Tracer 
-        #Tracer()()
-        #u = (KLth.mean(0) - mean_k*mean_l)*n/(n-1)
-        #biased
-        u = KLth.mean(0) - mean_k*mean_l
-
-        # cov
-        Kt = Kth - mean_k
-        Lt = Lth - mean_l 
-        # Gam is n x J
-        Gam = Kt*Lt - u 
-        mean_gam = Gam.mean(0)
-        Gam0 = Gam - mean_gam
-        Sig = Gam0.T.dot(Gam0)/n
-        s = nlinalg.matrix_inverse(Sig + diag_regth).dot(u).dot(u)*n
-        #s = nlinalg.matrix_inverse(Sig).dot(u).dot(u)*n
-        return s
+    def nfsic_objective(params, pdata, J):
+    """目标函数：最大化NFSIC统计量"""
+    # 解包参数
+    V = params[:J * dx].reshape(J, dx)
+    W = params[J * dx: J * (dx + dy)].reshape(J, dy)
+    gwidthx = params[J * (dx + dy)]
+    gwidthy = params[J * (dx + dy) + 1]
+    
+    # 计算NFSIC统计量
+    k = kernel.KGauss(gwidthx)
+    l = kernel.KGauss(gwidthy)
+    s, _, _ = nfsic(pdata.X, pdata.Y, k, l, V, W)
+    return -s  # 负值用于最小化
 
 
     @staticmethod
@@ -290,95 +270,19 @@ class GaussNFSIC(NFSIC):
 
 
     @staticmethod
-    def optimize_locs_widths(pdata, alpha, n_test_locs=5, max_iter=400,
-            V_step=1, W_step=1, gwidthx_step=1, gwidthy_step=1,
-            batch_proportion=1.0, tol_fun=1e-3, step_pow=0.5, seed=1, reg=1e-5, 
-            gwidthx_lb=None, gwidthx_ub=None, gwidthy_lb=None,
-        gwidthy_ub=None):
-        """Optimize the test locations V, W and the Gaussian kernel width by 
-        maximizing a test power criterion. X, Y should not be the same data as
-        used in the actual test (i.e., should be a held-out set). 
-
-        - max_iter: #gradient descent iterations
-        - batch_proportion: (0,1] value to be multipled with n giving the batch 
-            size in stochastic gradient. 1 = full gradient ascent.
-        - tol_fun: termination tolerance of the objective value
-        - If the lb, ub bounds are None, use fraction of the median heuristics 
-            to automatically set the bounds.
-        
-        Return (V test_locs, W test_locs, gaussian width for x, gaussian width
-            for y, info log)
-        """
-
-        """
-        Optimize the empirical version of Lambda(T) i.e., the criterion used 
-        to optimize the test locations, for the test based 
-        on difference of mean embeddings with Gaussian kernel. 
-        Also optimize the Gaussian width.
-        """
-        J = n_test_locs
-        # Use grid search to initialize the gwidths for both X, Y
-        X, Y = pdata.xy()
-        n_gwidth_cand = 5
-        gwidth_factors = 2.0**np.linspace(-3, 3, n_gwidth_cand) 
-        medx2 = util.meddistance(X, 1000)**2
-        medy2 = util.meddistance(Y, 1000)**2
-
-        #V, W = GaussNFSIC.init_locs_2randn(pdata, n_test_locs, seed=seed)
-        # draw from a joint Gaussian
-
-        # We have to be very careful with init_locs_joint_randn. This freezes 
-        # when d > 2000.
-        #V, W = GaussNFSIC.init_locs_joint_randn(pdata, n_test_locs, seed=seed)
-        #V, W = GaussNFSIC.init_locs_joint_subset(pdata, n_test_locs, seed=seed)
-
-        k = kernel.KGauss(medx2*2)
-        l = kernel.KGauss(medy2*2)
-        V, W = GaussNFSIC.init_check_subset(pdata, J, k, l, n_cand=20, subsample=2000,
-           seed=seed+27)
-        #V, W = GaussNFSIC.init_locs_marginals_subset(pdata, n_test_locs, seed=seed)
-
-        list_gwidthx = np.hstack( ( (medx2)*gwidth_factors ) )
-        list_gwidthy = np.hstack( ( (medy2)*gwidth_factors ) )
-        bestij, lambs = GaussNFSIC.grid_search_gwidth(pdata, V, W,
-                list_gwidthx, list_gwidthy)
-        gwidthx0 = list_gwidthx[bestij[0]]
-        gwidthy0 = list_gwidthy[bestij[1]]
-        assert util.is_real_num(gwidthx0), 'gwidthx0 not real. Was %s'%str(gwidthx0)
-        assert util.is_real_num(gwidthy0), 'gwidthy0 not real. Was %s'%str(gwidthy0)
-        assert gwidthx0 > 0, 'gwidthx0 not positive. Was %.3g'%gwidthx0
-        assert gwidthy0 > 0, 'gwidthy0 not positive. Was %.3g'%gwidthy0
-        logging.info('After grid search, gwidthx0=%.3g'%gwidthx0)
-        logging.info('After grid search, gwidthy0=%.3g'%gwidthy0)
-
-        # set the width bounds
-        fac_min = 5e-2
-        fac_max = 5e3
-        gwidthx_lb = gwidthx_lb if gwidthx_lb is not None else fac_min*medx2
-        gwidthx_ub = gwidthx_ub if gwidthx_ub is not None else fac_max*medx2
-        gwidthy_lb = gwidthy_lb if gwidthy_lb is not None else fac_min*medy2
-        gwidthy_ub = gwidthy_ub if gwidthy_ub is not None else fac_max*medy2
-
-        # info = optimization info 
-        V, W, gwidthx, gwidthy, info  = \
-                generic_optimize_locs_widths(pdata, V, W, gwidthx0, gwidthy0,
-                        GaussNFSIC.func_obj, max_iter=max_iter, V_step=V_step,
-                        W_step=W_step, gwidthx_step=gwidthx_step,
-                        gwidthy_step=gwidthy_step,
-                        batch_proportion=batch_proportion, tol_fun=tol_fun,
-                        step_pow=step_pow, reg=reg, seed=seed+1, 
-                        gwidthx_lb=gwidthx_lb, gwidthx_ub=gwidthx_ub,
-                        gwidthy_lb=gwidthy_lb, gwidthy_ub=gwidthy_ub)
-        assert util.is_real_num(gwidthx), 'gwidthx is not real. Was %s' % str(gwidthx)
-        assert util.is_real_num(gwidthy), 'gwidthy is not real. Was %s' % str(gwidthy)
-
-        # make sure that the optimized gwidthx, gwidthy are not too small
-        # or too large.
-        fac_min = 5e-2 
-        fac_max = 5e3
-        gwidthx = max(fac_min*medx2, 1e-7, min(fac_max*medx2, gwidthx))
-        gwidthy = max(fac_min*medy2, 1e-7, min(fac_max*medy2, gwidthy))
-        return V, W, gwidthx, gwidthy, info
+    def nfsic_objective(params, pdata, J):
+    """目标函数：最大化NFSIC统计量"""
+    # 解包参数
+    V = params[:J * dx].reshape(J, dx)
+    W = params[J * dx: J * (dx + dy)].reshape(J, dy)
+    gwidthx = params[J * (dx + dy)]
+    gwidthy = params[J * (dx + dy) + 1]
+    
+    # 计算NFSIC统计量
+    k = kernel.KGauss(gwidthx)
+    l = kernel.KGauss(gwidthy)
+    s, _, _ = nfsic(pdata.X, pdata.Y, k, l, V, W)
+    return -s  # 负值用于最小化
 
     @staticmethod
     def grid_search_gwidth(pdata, V, W, list_gwidthx, list_gwidthy):
