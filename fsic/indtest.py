@@ -223,6 +223,7 @@ class GaussNFSIC(NFSIC):
     """
 
     def __init__(self, gwidthx, gwidthy, V, W, alpha=0.01, reg='auto', n_permute=None, seed=87):
+    
         """
         V,W locations are paired.
 
@@ -240,23 +241,7 @@ class GaussNFSIC(NFSIC):
         l = kernel.KGauss(gwidthy)
         super(GaussNFSIC, self).__init__(k, l, V, W, alpha=alpha, reg=reg,
                 n_permute=n_permute, seed=seed)
-
-    @staticmethod
-    def nfsic_objective(params, pdata, J):
-    """目标函数：最大化NFSIC统计量"""
-    # 解包参数
-    V = params[:J * dx].reshape(J, dx)
-    W = params[J * dx: J * (dx + dy)].reshape(J, dy)
-    gwidthx = params[J * (dx + dy)]
-    gwidthy = params[J * (dx + dy) + 1]
-    
-    # 计算NFSIC统计量
-    k = kernel.KGauss(gwidthx)
-    l = kernel.KGauss(gwidthy)
-    s, _, _ = nfsic(pdata.X, pdata.Y, k, l, V, W)
-    return -s  # 负值用于最小化
-
-
+        
     @staticmethod
     def gauss_kernel_theano(Xth, Vth, gwidth2):
         """Gaussian kernel. Theano version.
@@ -271,18 +256,18 @@ class GaussNFSIC(NFSIC):
 
     @staticmethod
     def nfsic_objective(params, pdata, J):
-    """目标函数：最大化NFSIC统计量"""
-    # 解包参数
-    V = params[:J * dx].reshape(J, dx)
-    W = params[J * dx: J * (dx + dy)].reshape(J, dy)
-    gwidthx = params[J * (dx + dy)]
-    gwidthy = params[J * (dx + dy) + 1]
+        """目标函数：最大化NFSIC统计量"""
+        # 解包参数
+        V = params[:J * dx].reshape(J, dx)
+        W = params[J * dx: J * (dx + dy)].reshape(J, dy)
+        gwidthx = params[J * (dx + dy)]
+        gwidthy = params[J * (dx + dy) + 1]
     
-    # 计算NFSIC统计量
-    k = kernel.KGauss(gwidthx)
-    l = kernel.KGauss(gwidthy)
-    s, _, _ = nfsic(pdata.X, pdata.Y, k, l, V, W)
-    return -s  # 负值用于最小化
+        # 计算NFSIC统计量
+        k = kernel.KGauss(gwidthx)
+        l = kernel.KGauss(gwidthy)
+        s, _, _ = nfsic(pdata.X, pdata.Y, k, l, V, W)
+        return -s  # 负值用于最小化
 
     @staticmethod
     def grid_search_gwidth(pdata, V, W, list_gwidthx, list_gwidthy):
